@@ -1,0 +1,124 @@
+#define BLYNK_TEMPLATE_ID "TMPL45B5JT96D"
+#define BLYNK_TEMPLATE_NAME "Daniel Lampe"
+#define BLYNK_AUTH_TOKEN "Q-BA80m0Tsyrfn2c2R5nuHcVD-4kwdD8"
+
+#include <Adafruit_NeoPixel.h>
+#include <SPI.h>
+#include <BlynkSimpleEsp8266.h>
+#include <ESP8266WiFi.h>
+#include <Stepper.h>
+#include <ArduinoOTA.h>
+
+#define BLYNK_PRINT Serial
+
+#define PIN D2
+#define NUMPIXELS 60
+
+// Stepper-Pins (sicher!)
+#define IN1 D5  // GPIO14
+#define IN2 D6  // GPIO12
+#define IN3 D7  // GPIO13
+#define IN4 D1  // GPIO5 – ersetzt D8!
+
+const int stepsPerRevolution = 4096;
+int motorSpeed = 0;
+int motorDirection = 0;
+int pendingDirection = 0;
+bool directionChanged = false;
+
+bool rainbowActive = false;
+int rainbowIndex = 0;
+
+BlynkTimer timer;
+Stepper myStepper(stepsPerRevolution, IN1, IN2, IN3, IN4);
+Adafruit_NeoPixel pixels = Adafruit_NeoPixel(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
+
+// Rainbow-Effekt (ohne Absturz)
+uint32_t Wheel(byte pos) {
+  pos = 255 - pos;
+  if (pos < 85) return pixels.Color(255 - pos * 3, 0, pos * 3);
+  if (pos < 170) {
+    pos -= 85;
+    return pixels.Color(0, pos * 3, 255 - pos * 3);
+  }
+  pos -= 170;
+  return pixels.Color(pos * 3, 255 - pos * 3, 0);
+}
+
+void rainbowEffect() {
+  if (!rainbowActive) return;
+  for (int i = 0; i < NUMPIXELS; i++) {
+    pixels.setPixelColor(i, Wheel((rainbowIndex + i) & 255));
+  }
+  pixels.show();
+  rainbowIndex = (rainbowIndex + 1) % 256;
+}
+
+void stepperControl() {
+  if (motorSpeed > 0) {
+    if (directionChanged) {
+      motorDirection = pendingDirection;
+      directionChanged = false;
+    }
+    myStepper.setSpeed(motorSpeed);
+    myStepper.step((motorDirection == 0) ? 2 : -2);
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+
+  Blynk.begin(BLYNK_AUTH_TOKEN, "FRITZ!Box 6690 JR", "17332529613384332643");
+  pixels.begin();
+  pixels.setBrightness(55);
+
+  timer.setInterval(50, stepperControl);     // Stepper: alle 50 ms
+  timer.setInterval(100, rainbowEffect);     // Rainbow: alle 100 ms
+
+  ArduinoOTA.setHostname("DanielLampeESP");
+  ArduinoOTA.begin();
+}
+
+void loop() {
+  Blynk.run();
+  timer.run();
+  ArduinoOTA.handle();
+}
+
+BLYNK_WRITE(V0) {
+  float speedInput = param.asDouble();
+  if (speedInput > 2.0) speedInput = 2.0;
+  if (speedInput < 0.2) speedInput = 0.2;
+  motorSpeed = speedInput;
+  myStepper.setSpeed(motorSpeed);
+  Serial.print("Speed: ");
+  Serial.println(motorSpeed);
+}
+
+BLYNK_WRITE(V1) {
+  pendingDirection = param.asInt();  // 0 = CW, 1 = CCW
+  directionChanged = true;
+  Serial.print("Richtung gewechselt zu: ");
+  Serial.println(pendingDirection);
+}
+
+BLYNK_WRITE(V2) {
+  if (rainbowActive) return;  // Deaktiviert, wenn Rainbow aktiv
+  int R = param[0].asInt();
+  int G = param[1].asInt();
+  int B = param[2].asInt();
+  Serial.printf("Farbe: R=%d G=%d B=%d\n", R, G, B);
+  for (int i = 0; i < NUMPIXELS; i++) {
+    pixels.setPixelColor(i, pixels.Color(R, G, B));
+  }
+  pixels.show();
+}
+
+BLYNK_WRITE(V3) {
+  rainbowActive = param.asInt();
+  Serial.println(rainbowActive ? "Rainbow AN" : "Rainbow AUS");
+  if (!rainbowActive) {
+    pixels.clear();
+    pixels.show();
+  }
+}
