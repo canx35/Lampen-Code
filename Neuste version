@@ -1,0 +1,138 @@
+#include "BlynkEdgent.h"
+#include <Adafruit_NeoPixel.h>
+
+// Stepper Setup
+int pins[] = { D5, D6, D7, D1 };  // IN1 – IN4 auf ULN2003
+int halfStepCount = 8;
+int halfSteps[][4] = {
+  {HIGH, LOW, LOW, LOW},
+  {HIGH, HIGH, LOW, LOW},
+  {LOW, HIGH, LOW, LOW},
+  {LOW, HIGH, HIGH, LOW},
+  {LOW, LOW, HIGH, LOW},
+  {LOW, LOW, HIGH, HIGH},
+  {LOW, LOW, LOW, HIGH},
+  {HIGH, LOW, LOW, HIGH}
+};
+
+int currentStep = 0;
+int blynkSpeed = 0;
+int delayMicros = 5000;
+bool clockwise = true;
+
+// NeoPixel Setup
+#define NEOPIXEL_PIN D2
+#define NUMPIXELS 60
+Adafruit_NeoPixel pixels = Adafruit_NeoPixel(NUMPIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+
+// Rainbow
+bool rainbowActive = false;
+int rainbowIndex = 0;
+int rainbowSpeed = 100;
+int rainbowTimerID = 0;
+
+BlynkTimer timer;
+unsigned long lastStepTime = 0;
+
+uint32_t Wheel(byte pos) {
+  pos = 255 - pos;
+  if (pos < 85) return pixels.Color(255 - pos * 3, 0, pos * 3);
+  if (pos < 170) {
+    pos -= 85;
+    return pixels.Color(0, pos * 3, 255 - pos * 3);
+  }
+  pos -= 170;
+  return pixels.Color(pos * 3, 255 - pos * 3, 0);
+}
+
+void rainbowEffect() {
+  if (!rainbowActive) return;
+  for (int i = 0; i < NUMPIXELS; i++) {
+    pixels.setPixelColor(i, Wheel((rainbowIndex + i) & 255));
+  }
+  pixels.show();
+  rainbowIndex = (rainbowIndex + 1) % 256;
+}
+
+void stepMotor() {
+  if (blynkSpeed <= 0) return;
+
+  unsigned long now = micros();
+  if (now - lastStepTime >= delayMicros) {
+    lastStepTime = now;
+    int stepIndex = clockwise ? currentStep : (halfStepCount - 1 - currentStep);
+    for (int pin = 0; pin < 4; pin++) {
+      digitalWrite(pins[pin], halfSteps[stepIndex][pin]);
+    }
+    currentStep = (currentStep + 1) % halfStepCount;
+  }
+}
+
+void setup()
+{
+  Serial.begin(9600);
+  delay(100);
+  BlynkEdgent.begin();
+
+  for (int i = 0; i < 4; i++) {
+    pinMode(pins[i], OUTPUT);
+    digitalWrite(pins[i], LOW);
+  }
+
+  pixels.begin();
+  pixels.setBrightness(55);
+  pixels.clear();
+  pixels.show();
+
+  rainbowTimerID = timer.setInterval(rainbowSpeed, rainbowEffect);
+}
+
+void loop() {
+  BlynkEdgent.run();
+  timer.run();
+  stepMotor();
+}
+
+// V0: Stepper Geschwindigkeit (0–10)
+BLYNK_WRITE(V0) {
+  blynkSpeed = param.asInt();
+  delayMicros = (blynkSpeed <= 0) ? 9999999 : map(blynkSpeed, 1, 10, 10000, 2000);
+  Serial.printf("Stepper-Speed V0 = %d → delay = %d µs\n", blynkSpeed, delayMicros);
+}
+
+// V1: Rainbow AN/AUS
+BLYNK_WRITE(V1) {
+  rainbowActive = param.asInt();
+  Serial.println(rainbowActive ? "🌈 Rainbow AN" : "🌈 Rainbow AUS");
+  if (!rainbowActive) {
+    pixels.clear();
+    pixels.show();
+  }
+}
+
+// V2: RGB-Farbe (nur bei Rainbow AUS)
+BLYNK_WRITE(V2) {
+  if (rainbowActive) return;
+  int R = param[0].asInt();
+  int G = param[1].asInt();
+  int B = param[2].asInt();
+  for (int i = 0; i < NUMPIXELS; i++) {
+    pixels.setPixelColor(i, pixels.Color(R, G, B));
+  }
+  pixels.show();
+}
+
+// V3: Richtung 0 = vorwärts, 1 = rückwärts
+BLYNK_WRITE(V3) {
+  clockwise = (param.asInt() == 0);
+  Serial.println(clockwise ? "Richtung: Vorwärts" : "Richtung: Rückwärts");
+}
+
+// V4: Rainbow Speed (Slider 0–100 → mapped 500–50ms)
+BLYNK_WRITE(V4) {
+  int input = param.asInt();
+  rainbowSpeed = map(input, 0, 100, 500, 50);
+  timer.deleteTimer(rainbowTimerID);
+  rainbowTimerID = timer.setInterval(rainbowSpeed, rainbowEffect);
+  Serial.printf("🌈 Rainbow-Speed gesetzt: %d ms\n", rainbowSpeed);
+}
